@@ -198,7 +198,7 @@ func mountsToLayerAndParents(mounts []mount.Mount) (string, []string, error) {
 	}
 	mnt := mounts[0]
 	if mnt.Type != "lcow-layer" {
-		return "", nil, errors.Wrap(errdefs.ErrInvalidArgument, "mount layer type must be lcow-layer")
+		return "", nil, errdefs.ErrNotImplemented
 	}
 
 	parentLayerPaths, err := mnt.GetParentPaths()

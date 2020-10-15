@@ -21,7 +21,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"syscall"
 	"time"
 
 	winio "github.com/Microsoft/go-winio"
@@ -29,14 +28,7 @@ import (
 )
 
 func isNoent(err error) bool {
-	if err != nil {
-		if oerr, ok := err.(*os.PathError); ok {
-			if oerr.Err == syscall.ENOENT {
-				return true
-			}
-		}
-	}
-	return false
+	return os.IsNotExist(err)
 }
 
 func dialer(address string, timeout time.Duration) (net.Conn, error) {

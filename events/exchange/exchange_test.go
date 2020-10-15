@@ -19,7 +19,6 @@ package exchange
 import (
 	"context"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 
@@ -52,11 +51,8 @@ func TestExchangeBasic(t *testing.T) {
 	eventq2, errq2 := exchange.Subscribe(ctx2)
 
 	t.Log("publish")
-	var wg sync.WaitGroup
-	wg.Add(1)
 	errChan := make(chan error)
 	go func() {
-		defer wg.Done()
 		defer close(errChan)
 		for _, event := range testevents {
 			if err := exchange.Publish(ctx, "/test", event); err != nil {
@@ -69,7 +65,6 @@ func TestExchangeBasic(t *testing.T) {
 	}()
 
 	t.Log("waiting")
-	wg.Wait()
 	if err := <-errChan; err != nil {
 		t.Fatal(err)
 	}
@@ -225,11 +220,8 @@ func TestExchangeFilters(t *testing.T) {
 	}
 
 	t.Log("publish")
-	var wg sync.WaitGroup
-	wg.Add(1)
 	errChan := make(chan error)
 	go func() {
-		defer wg.Done()
 		defer close(errChan)
 		for _, es := range testEventSets {
 			for _, e := range es.events {
@@ -244,7 +236,6 @@ func TestExchangeFilters(t *testing.T) {
 	}()
 
 	t.Log("waiting")
-	wg.Wait()
 	if err := <-errChan; err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +291,7 @@ func TestExchangeValidateTopic(t *testing.T) {
 	} {
 		t.Run(testcase.input, func(t *testing.T) {
 			event := &eventstypes.ContainerCreate{ID: t.Name()}
-			if err := exchange.Publish(ctx, testcase.input, event); errors.Cause(err) != testcase.err {
+			if err := exchange.Publish(ctx, testcase.input, event); !errors.Is(err, testcase.err) {
 				if err == nil {
 					t.Fatalf("expected error %v, received nil", testcase.err)
 				} else {
@@ -321,7 +312,7 @@ func TestExchangeValidateTopic(t *testing.T) {
 			}
 
 			// make sure we get same errors with forward.
-			if err := exchange.Forward(ctx, &envelope); errors.Cause(err) != testcase.err {
+			if err := exchange.Forward(ctx, &envelope); !errors.Is(err, testcase.err) {
 				if err == nil {
 					t.Fatalf("expected error %v, received nil", testcase.err)
 				} else {

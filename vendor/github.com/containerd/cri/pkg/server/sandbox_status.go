@@ -1,23 +1,24 @@
 /*
-Copyright 2017 The Kubernetes Authors.
+   Copyright The containerd Authors.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+       http://www.apache.org/licenses/LICENSE-2.0
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
 */
 
 package server
 
 import (
 	"encoding/json"
+	goruntime "runtime"
 
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/errdefs"
@@ -37,11 +38,11 @@ func (c *criService) PodSandboxStatus(ctx context.Context, r *runtime.PodSandbox
 		return nil, errors.Wrap(err, "an error occurred when try to find sandbox")
 	}
 
-	ip, err := c.getIP(sandbox)
+	ip, additionalIPs, err := c.getIPs(sandbox)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to get sandbox ip")
 	}
-	status := toCRISandboxStatus(sandbox.Metadata, sandbox.Status.Get(), ip)
+	status := toCRISandboxStatus(sandbox.Metadata, sandbox.Status.Get(), ip, additionalIPs)
 	if status.GetCreatedAt() == 0 {
 		// CRI doesn't allow CreatedAt == 0.
 		info, err := sandbox.Container.Info(ctx)
@@ -66,38 +67,46 @@ func (c *criService) PodSandboxStatus(ctx context.Context, r *runtime.PodSandbox
 	}, nil
 }
 
-func (c *criService) getIP(sandbox sandboxstore.Sandbox) (string, error) {
+func (c *criService) getIPs(sandbox sandboxstore.Sandbox) (string, []string, error) {
 	config := sandbox.Config
 
-	if config.GetLinux().GetSecurityContext().GetNamespaceOptions().GetNetwork() == runtime.NamespaceMode_NODE {
+	if goruntime.GOOS != "windows" &&
+		config.GetLinux().GetSecurityContext().GetNamespaceOptions().GetNetwork() == runtime.NamespaceMode_NODE {
 		// For sandboxes using the node network we are not
 		// responsible for reporting the IP.
-		return "", nil
+		return "", nil, nil
 	}
 
 	if closed, err := sandbox.NetNS.Closed(); err != nil {
-		return "", errors.Wrap(err, "check network namespace closed")
+		return "", nil, errors.Wrap(err, "check network namespace closed")
 	} else if closed {
-		return "", nil
+		return "", nil, nil
 	}
 
-	return sandbox.IP, nil
+	return sandbox.IP, sandbox.AdditionalIPs, nil
 }
 
 // toCRISandboxStatus converts sandbox metadata into CRI pod sandbox status.
-func toCRISandboxStatus(meta sandboxstore.Metadata, status sandboxstore.Status, ip string) *runtime.PodSandboxStatus {
+func toCRISandboxStatus(meta sandboxstore.Metadata, status sandboxstore.Status, ip string, additionalIPs []string) *runtime.PodSandboxStatus {
 	// Set sandbox state to NOTREADY by default.
 	state := runtime.PodSandboxState_SANDBOX_NOTREADY
 	if status.State == sandboxstore.StateReady {
 		state = runtime.PodSandboxState_SANDBOX_READY
 	}
 	nsOpts := meta.Config.GetLinux().GetSecurityContext().GetNamespaceOptions()
+	var ips []*runtime.PodIP
+	for _, additionalIP := range additionalIPs {
+		ips = append(ips, &runtime.PodIP{Ip: additionalIP})
+	}
 	return &runtime.PodSandboxStatus{
 		Id:        meta.ID,
 		Metadata:  meta.Config.GetMetadata(),
 		State:     state,
 		CreatedAt: status.CreatedAt.UnixNano(),
-		Network:   &runtime.PodSandboxNetworkStatus{Ip: ip},
+		Network: &runtime.PodSandboxNetworkStatus{
+			Ip:            ip,
+			AdditionalIps: ips,
+		},
 		Linux: &runtime.LinuxPodSandboxStatus{
 			Namespaces: &runtime.Namespace{
 				Options: &runtime.NamespaceOption{

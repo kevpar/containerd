@@ -27,7 +27,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/containerd/console"
@@ -39,6 +38,7 @@ import (
 	google_protobuf "github.com/gogo/protobuf/types"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
+	"golang.org/x/sys/unix"
 )
 
 // Init represents an initial process for a container
@@ -56,15 +56,17 @@ type Init struct {
 
 	WorkDir string
 
-	id           string
-	Bundle       string
-	console      console.Console
-	Platform     stdio.Platform
-	io           *processIO
-	runtime      *runc.Runc
+	id       string
+	Bundle   string
+	console  console.Console
+	Platform stdio.Platform
+	io       *processIO
+	runtime  *runc.Runc
+	// pausing preserves the pausing state.
+	pausing      *atomicBool
 	status       int
 	exited       time.Time
-	pid          safePid
+	pid          int
 	closers      []io.Closer
 	stdin        io.Closer
 	stdio        stdio.Stdio
@@ -85,7 +87,7 @@ func NewRunc(root, path, namespace, runtime, criu string, systemd bool) *runc.Ru
 		Command:       runtime,
 		Log:           filepath.Join(path, "log.json"),
 		LogFormat:     runc.JSON,
-		PdeathSignal:  syscall.SIGKILL,
+		PdeathSignal:  unix.SIGKILL,
 		Root:          filepath.Join(root, namespace),
 		Criu:          criu,
 		SystemdCgroup: systemd,
@@ -97,6 +99,7 @@ func New(id string, runtime *runc.Runc, stdio stdio.Stdio) *Init {
 	p := &Init{
 		id:        id,
 		runtime:   runtime,
+		pausing:   new(atomicBool),
 		stdio:     stdio,
 		status:    0,
 		waitBlock: make(chan struct{}),
@@ -113,8 +116,6 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) error {
 		pio     *processIO
 		pidFile = newPidFile(p.Bundle)
 	)
-	p.pid.Lock()
-	defer p.pid.Unlock()
 
 	if r.Terminal {
 		if socket, err = runc.NewTempConsoleSocket(); err != nil {
@@ -170,12 +171,12 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to retrieve OCI runtime container pid")
 	}
-	p.pid.pid = pid
+	p.pid = pid
 	return nil
 }
 
 func (p *Init) openStdin(path string) error {
-	sc, err := fifo.OpenFifo(context.Background(), path, syscall.O_WRONLY|syscall.O_NONBLOCK, 0)
+	sc, err := fifo.OpenFifo(context.Background(), path, unix.O_WRONLY|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return errors.Wrapf(err, "failed to open stdin fifo %s", path)
 	}
@@ -216,7 +217,7 @@ func (p *Init) ID() string {
 
 // Pid of the process
 func (p *Init) Pid() int {
-	return p.pid.get()
+	return p.pid
 }
 
 // ExitStatus of the process
@@ -237,17 +238,14 @@ func (p *Init) ExitedAt() time.Time {
 
 // Status of the process
 func (p *Init) Status(ctx context.Context) (string, error) {
+	if p.pausing.get() {
+		return "pausing", nil
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	c, err := p.runtime.State(ctx, p.id)
-	if err != nil {
-		if strings.Contains(err.Error(), "does not exist") {
-			return "stopped", nil
-		}
-		return "", p.runtimeError(err, "OCI runtime state failed")
-	}
-	return c.Status, nil
+	return p.initState.Status(ctx)
 }
 
 // Start the init process
@@ -275,7 +273,6 @@ func (p *Init) setExited(status int) {
 	p.exited = time.Now()
 	p.status = status
 	p.Platform.ShutdownConsole(context.Background(), p.console)
-	p.pid.set(StoppedPID)
 	close(p.waitBlock)
 }
 
@@ -364,7 +361,7 @@ func (p *Init) KillAll(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	err := p.runtime.Kill(ctx, p.id, int(syscall.SIGKILL), &runc.KillOpts{
+	err := p.runtime.Kill(ctx, p.id, int(unix.SIGKILL), &runc.KillOpts{
 		All: true,
 	})
 	return p.runtimeError(err, "OCI runtime killall failed")

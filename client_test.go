@@ -29,13 +29,17 @@ import (
 	"time"
 
 	"github.com/containerd/containerd/defaults"
+	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/images"
+	"github.com/containerd/containerd/leases"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/log/logtest"
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/pkg/testutil"
 	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/sys"
+	"github.com/opencontainers/go-digest"
+	"github.com/opencontainers/image-spec/identity"
 	"github.com/sirupsen/logrus"
 )
 
@@ -54,7 +58,6 @@ func init() {
 	flag.StringVar(&address, "address", defaultAddress, "The address to the containerd socket for use in the tests")
 	flag.BoolVar(&noDaemon, "no-daemon", false, "Do not start a dedicated daemon for the tests")
 	flag.BoolVar(&noCriu, "no-criu", false, "Do not run the checkpoint tests")
-	flag.Parse()
 }
 
 func testContext(t testing.TB) (context.Context, context.CancelFunc) {
@@ -67,6 +70,7 @@ func testContext(t testing.TB) (context.Context, context.CancelFunc) {
 }
 
 func TestMain(m *testing.M) {
+	flag.Parse()
 	if testing.Short() {
 		os.Exit(m.Run())
 	}
@@ -108,7 +112,7 @@ func TestMain(m *testing.M) {
 		}
 	}
 
-	waitCtx, waitCancel := context.WithTimeout(ctx, 2*time.Second)
+	waitCtx, waitCancel := context.WithTimeout(ctx, 4*time.Second)
 	client, err := ctrd.waitForStart(waitCtx)
 	waitCancel()
 	if err != nil {
@@ -165,8 +169,9 @@ func TestMain(m *testing.M) {
 			fmt.Fprintln(os.Stderr, "failed to remove test root dir", err)
 			os.Exit(1)
 		}
-		// only print containerd logs if the test failed
-		if status != 0 {
+
+		// only print containerd logs if the test failed or tests were run with -v
+		if status != 0 || testing.Verbose() {
 			fmt.Fprintln(os.Stderr, buf.String())
 		}
 	}
@@ -212,6 +217,85 @@ func TestImagePull(t *testing.T) {
 	_, err = client.Pull(ctx, testImage, WithPlatformMatcher(platforms.Default()))
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestImagePullWithDiscardContent(t *testing.T) {
+	client, err := newClient(t, address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	ctx, cancel := testContext(t)
+	defer cancel()
+
+	err = client.ImageService().Delete(ctx, testImage, images.SynchronousDelete())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ls := client.LeasesService()
+	l, err := ls.Create(ctx, leases.WithRandomID(), leases.WithExpiration(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx = leases.WithLease(ctx, l.ID)
+	img, err := client.Pull(ctx, testImage,
+		WithPlatformMatcher(platforms.Default()),
+		WithPullUnpack,
+		WithChildLabelMap(images.ChildGCLabelsFilterLayers),
+	)
+	// Synchronously garbage collect contents
+	if errL := ls.Delete(ctx, l, leases.SynchronousDelete); errL != nil {
+		t.Fatal(errL)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Check if all layer contents have been unpacked and aren't preserved
+	var (
+		diffIDs []digest.Digest
+		layers  []digest.Digest
+	)
+	cs := client.ContentStore()
+	manifest, err := images.Manifest(ctx, cs, img.Target(), platforms.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Layers) == 0 {
+		t.Fatalf("failed to get children from %v", img.Target())
+	}
+	for _, l := range manifest.Layers {
+		layers = append(layers, l.Digest)
+	}
+	config, err := images.Config(ctx, cs, img.Target(), platforms.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	diffIDs, err = images.RootFS(ctx, cs, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(layers) != len(diffIDs) {
+		t.Fatalf("number of layers and diffIDs don't match: %d != %d", len(layers), len(diffIDs))
+	} else if len(layers) == 0 {
+		t.Fatalf("there is no layers in the target image(parent: %v)", img.Target())
+	}
+	var (
+		sn    = client.SnapshotService("")
+		chain []digest.Digest
+	)
+	for i, dgst := range layers {
+		chain = append(chain, diffIDs[i])
+		chainID := identity.ChainID(chain).String()
+		if _, err := sn.Stat(ctx, chainID); err != nil {
+			t.Errorf("snapshot %v must exist: %v", chainID, err)
+		}
+		if _, err := cs.Info(ctx, dgst); err == nil || !errdefs.IsNotFound(err) {
+			t.Errorf("content %v must be garbage collected: %v", dgst, err)
+		}
 	}
 }
 

@@ -272,6 +272,16 @@ func TestFilters(t *testing.T) {
 			input:     "image~=,id?=?fbaq",
 			errString: `filters: parse error: [image~= >|,|< id?=?fbaq]: expected value or quoted`,
 		},
+		{
+			name:      "FieldQuotedLiteralNotTerminated",
+			input:     "labels.ns/key==value",
+			errString: `filters: parse error: [labels.ns >|/|< key==value]: quoted literal not terminated`,
+		},
+		{
+			name:      "ValueQuotedLiteralNotTerminated",
+			input:     "labels.key==/value",
+			errString: `filters: parse error: [labels.key== >|/|< value]: quoted literal not terminated`,
+		},
 	} {
 		t.Run(testcase.name, func(t *testing.T) {
 			filter, err := Parse(testcase.input)
@@ -305,5 +315,22 @@ func TestFilters(t *testing.T) {
 				t.Fatalf("%q: %#v != %#v", testcase.input, results, testcase.expected)
 			}
 		})
+	}
+}
+
+func TestOperatorStrings(t *testing.T) {
+	for _, testcase := range []struct {
+		op       operator
+		expected string
+	}{
+		{operatorPresent, "?"},
+		{operatorEqual, "=="},
+		{operatorNotEqual, "!="},
+		{operatorMatches, "~="},
+		{10, "unknown"},
+	} {
+		if !reflect.DeepEqual(testcase.op.String(), testcase.expected) {
+			t.Fatalf("return value unexpected: %v != %v", testcase.op.String(), testcase.expected)
+		}
 	}
 }

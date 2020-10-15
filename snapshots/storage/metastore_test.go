@@ -28,8 +28,8 @@ import (
 	"github.com/containerd/containerd/snapshots"
 	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/errors"
-	"gotest.tools/assert"
-	is "gotest.tools/assert/cmp"
+	"gotest.tools/v3/assert"
+	is "gotest.tools/v3/assert/cmp"
 )
 
 type testFunc func(context.Context, *testing.T, *MetaStore)
@@ -261,7 +261,7 @@ var cmpSnapshotInfo = cmp.FilterPath(
 		// actual value should be within a few seconds of now
 		now := time.Now()
 		delta := now.Sub(actual)
-		threshold := 10 * time.Second
+		threshold := 30 * time.Second
 		return delta > -threshold && delta < threshold
 	}))
 

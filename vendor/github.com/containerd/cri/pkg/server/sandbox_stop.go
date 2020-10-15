@@ -1,17 +1,17 @@
 /*
-Copyright 2017 The Kubernetes Authors.
+   Copyright The containerd Authors.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+       http://www.apache.org/licenses/LICENSE-2.0
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
 */
 
 package server
@@ -23,7 +23,6 @@ import (
 	eventtypes "github.com/containerd/containerd/api/events"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/log"
-	cni "github.com/containerd/go-cni"
 	"github.com/pkg/errors"
 	"golang.org/x/net/context"
 	runtime "k8s.io/cri-api/pkg/apis/runtime/v1alpha2"
@@ -40,6 +39,15 @@ func (c *criService) StopPodSandbox(ctx context.Context, r *runtime.StopPodSandb
 		return nil, errors.Wrapf(err, "an error occurred when try to find sandbox %q",
 			r.GetPodSandboxId())
 	}
+
+	if err := c.stopPodSandbox(ctx, sandbox); err != nil {
+		return nil, err
+	}
+
+	return &runtime.StopPodSandboxResponse{}, nil
+}
+
+func (c *criService) stopPodSandbox(ctx context.Context, sandbox sandboxstore.Sandbox) error {
 	// Use the full sandbox id.
 	id := sandbox.ID
 
@@ -53,44 +61,43 @@ func (c *criService) StopPodSandbox(ctx context.Context, r *runtime.StopPodSandb
 		}
 		// Forcibly stop the container. Do not use `StopContainer`, because it introduces a race
 		// if a container is removed after list.
-		if err = c.stopContainer(ctx, container, 0); err != nil {
-			return nil, errors.Wrapf(err, "failed to stop container %q", container.ID)
+		if err := c.stopContainer(ctx, container, 0); err != nil {
+			return errors.Wrapf(err, "failed to stop container %q", container.ID)
 		}
 	}
 
-	if err := c.unmountSandboxFiles(id, sandbox.Config); err != nil {
-		return nil, errors.Wrap(err, "failed to unmount sandbox files")
+	if err := c.cleanupSandboxFiles(id, sandbox.Config); err != nil {
+		return errors.Wrap(err, "failed to cleanup sandbox files")
 	}
 
 	// Only stop sandbox container when it's running or unknown.
 	state := sandbox.Status.Get().State
 	if state == sandboxstore.StateReady || state == sandboxstore.StateUnknown {
 		if err := c.stopSandboxContainer(ctx, sandbox); err != nil {
-			return nil, errors.Wrapf(err, "failed to stop sandbox container %q in %q state", id, state)
+			return errors.Wrapf(err, "failed to stop sandbox container %q in %q state", id, state)
 		}
 	}
 
 	// Teardown network for sandbox.
 	if sandbox.NetNS != nil {
-		netNSPath := sandbox.NetNSPath
 		// Use empty netns path if netns is not available. This is defined in:
 		// https://github.com/containernetworking/cni/blob/v0.7.0-alpha1/SPEC.md
 		if closed, err := sandbox.NetNS.Closed(); err != nil {
-			return nil, errors.Wrap(err, "failed to check network namespace closed")
+			return errors.Wrap(err, "failed to check network namespace closed")
 		} else if closed {
-			netNSPath = ""
+			sandbox.NetNSPath = ""
 		}
-		if err := c.teardownPod(ctx, id, netNSPath, sandbox.Config); err != nil {
-			return nil, errors.Wrapf(err, "failed to destroy network for sandbox %q", id)
+		if err := c.teardownPodNetwork(ctx, sandbox); err != nil {
+			return errors.Wrapf(err, "failed to destroy network for sandbox %q", id)
 		}
-		if err = sandbox.NetNS.Remove(); err != nil {
-			return nil, errors.Wrapf(err, "failed to remove network namespace for sandbox %q", id)
+		if err := sandbox.NetNS.Remove(); err != nil {
+			return errors.Wrapf(err, "failed to remove network namespace for sandbox %q", id)
 		}
 	}
 
 	log.G(ctx).Infof("TearDown network for sandbox %q successfully", id)
 
-	return &runtime.StopPodSandboxResponse{}, nil
+	return nil
 }
 
 // stopSandboxContainer kills the sandbox container.
@@ -156,17 +163,23 @@ func (c *criService) waitSandboxStop(ctx context.Context, sandbox sandboxstore.S
 	}
 }
 
-// teardownPod removes the network from the pod
-func (c *criService) teardownPod(ctx context.Context, id string, path string, config *runtime.PodSandboxConfig) error {
+// teardownPodNetwork removes the network from the pod
+func (c *criService) teardownPodNetwork(ctx context.Context, sandbox sandboxstore.Sandbox) error {
 	if c.netPlugin == nil {
 		return errors.New("cni config not initialized")
 	}
 
-	labels := getPodCNILabels(id, config)
-	return c.netPlugin.Remove(ctx, id,
-		path,
-		cni.WithLabels(labels),
-		cni.WithCapabilityPortMap(toCNIPortMappings(config.GetPortMappings())))
+	var (
+		id     = sandbox.ID
+		path   = sandbox.NetNSPath
+		config = sandbox.Config
+	)
+	opts, err := cniNamespaceOpts(id, config)
+	if err != nil {
+		return errors.Wrap(err, "get cni namespace options")
+	}
+
+	return c.netPlugin.Remove(ctx, id, path, opts...)
 }
 
 // cleanupUnknownSandbox cleanup stopped sandbox in unknown state.

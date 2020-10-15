@@ -48,9 +48,31 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-func testDB(t *testing.T) (context.Context, *DB, func()) {
+type testOptions struct {
+	extraSnapshots map[string]func(string) (snapshots.Snapshotter, error)
+}
+
+type testOpt func(*testOptions)
+
+func withSnapshotter(name string, fn func(string) (snapshots.Snapshotter, error)) testOpt {
+	return func(to *testOptions) {
+		if to.extraSnapshots == nil {
+			to.extraSnapshots = map[string]func(string) (snapshots.Snapshotter, error){}
+		}
+		to.extraSnapshots[name] = fn
+	}
+}
+
+func testDB(t *testing.T, opt ...testOpt) (context.Context, *DB, func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx = namespaces.WithNamespace(ctx, "testing")
+	ctx = logtest.WithT(ctx, t)
+
+	var topts testOptions
+
+	for _, o := range opt {
+		o(&topts)
+	}
 
 	dirname, err := ioutil.TempDir("", strings.Replace(t.Name(), "/", "_", -1)+"-")
 	if err != nil {
@@ -60,6 +82,18 @@ func testDB(t *testing.T) (context.Context, *DB, func()) {
 	snapshotter, err := native.NewSnapshotter(filepath.Join(dirname, "native"))
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	snapshotters := map[string]snapshots.Snapshotter{
+		"native": snapshotter,
+	}
+
+	for name, fn := range topts.extraSnapshots {
+		snapshotter, err := fn(filepath.Join(dirname, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshotters[name] = snapshotter
 	}
 
 	cs, err := local.NewStore(filepath.Join(dirname, "content"))
@@ -72,7 +106,7 @@ func testDB(t *testing.T) (context.Context, *DB, func()) {
 		t.Fatal(err)
 	}
 
-	db := NewDB(bdb, cs, map[string]snapshots.Snapshotter{"native": snapshotter})
+	db := NewDB(bdb, cs, snapshotters)
 	if err := db.Init(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +420,7 @@ func TestMetadataCollector(t *testing.T) {
 
 	if err := mdb.Update(func(tx *bolt.Tx) error {
 		for _, obj := range objects {
-			node, err := create(obj, tx, NewImageStore(mdb), cs, sn)
+			node, err := create(obj, tx, mdb, cs, sn)
 			if err != nil {
 				return err
 			}
@@ -461,7 +495,7 @@ func benchmarkTrigger(n int) func(b *testing.B) {
 
 		if err := mdb.Update(func(tx *bolt.Tx) error {
 			for _, obj := range objects {
-				node, err := create(obj, tx, NewImageStore(mdb), cs, sn)
+				node, err := create(obj, tx, mdb, cs, sn)
 				if err != nil {
 					return err
 				}
@@ -541,16 +575,15 @@ type object struct {
 	labels  map[string]string
 }
 
-func create(obj object, tx *bolt.Tx, is images.Store, cs content.Store, sn snapshots.Snapshotter) (*gc.Node, error) {
+func create(obj object, tx *bolt.Tx, db *DB, cs content.Store, sn snapshots.Snapshotter) (*gc.Node, error) {
 	var (
 		node      *gc.Node
 		namespace = "test"
-		ctx       = namespaces.WithNamespace(context.Background(), namespace)
+		ctx       = WithTransactionContext(namespaces.WithNamespace(context.Background(), namespace), tx)
 	)
 
 	switch v := obj.data.(type) {
 	case testContent:
-		ctx := WithTransactionContext(ctx, tx)
 		expected := digest.FromBytes(v.data)
 		w, err := cs.Writer(ctx,
 			content.WithRef("test-ref"),
@@ -572,7 +605,6 @@ func create(obj object, tx *bolt.Tx, is images.Store, cs content.Store, sn snaps
 			}
 		}
 	case testSnapshot:
-		ctx := WithTransactionContext(ctx, tx)
 		if v.active {
 			_, err := sn.Prepare(ctx, v.key, v.parent, snapshots.WithLabels(obj.labels))
 			if err != nil {
@@ -596,14 +628,13 @@ func create(obj object, tx *bolt.Tx, is images.Store, cs content.Store, sn snaps
 			}
 		}
 	case testImage:
-		ctx := WithTransactionContext(ctx, tx)
-
 		image := images.Image{
 			Name:   v.name,
 			Target: v.target,
 			Labels: obj.labels,
 		}
-		_, err := is.Create(ctx, image)
+
+		_, err := NewImageStore(db).Create(ctx, image)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to create image")
 		}
@@ -619,12 +650,13 @@ func create(obj object, tx *bolt.Tx, is images.Store, cs content.Store, sn snaps
 			},
 			Spec: &types.Any{},
 		}
-		_, err := NewContainerStore(tx).Create(ctx, container)
+		_, err := NewContainerStore(db).Create(ctx, container)
 		if err != nil {
 			return nil, err
 		}
 	case testLease:
-		lm := NewLeaseManager(tx)
+		lm := NewLeaseManager(db)
+
 		l, err := lm.Create(ctx, leases.WithID(v.id), leases.WithLabels(obj.labels))
 		if err != nil {
 			return nil, err

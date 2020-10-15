@@ -3390,6 +3390,13 @@ file {
       type: TYPE_STRING
       json_name: "snapshotter"
     }
+    field {
+      name: "filters"
+      number: 2
+      label: LABEL_REPEATED
+      type: TYPE_STRING
+      json_name: "filters"
+    }
   }
   message_type {
     name: "ListSnapshotsResponse"
@@ -3437,6 +3444,16 @@ file {
       label: LABEL_OPTIONAL
       type: TYPE_INT64
       json_name: "inodes"
+    }
+  }
+  message_type {
+    name: "CleanupRequest"
+    field {
+      name: "snapshotter"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "snapshotter"
     }
   }
   enum_type {
@@ -3521,6 +3538,11 @@ file {
       name: "Usage"
       input_type: ".containerd.services.snapshots.v1.UsageRequest"
       output_type: ".containerd.services.snapshots.v1.UsageResponse"
+    }
+    method {
+      name: "Cleanup"
+      input_type: ".containerd.services.snapshots.v1.CleanupRequest"
+      output_type: ".google.protobuf.Empty"
     }
   }
   options {

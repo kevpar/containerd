@@ -45,7 +45,8 @@ func TestImageIsUnpacked(t *testing.T) {
 	defer client.Close()
 
 	// Cleanup
-	err = client.ImageService().Delete(ctx, imageName)
+	opts := []images.DeleteOpt{images.SynchronousDelete()}
+	err = client.ImageService().Delete(ctx, imageName, opts...)
 	if err != nil && !errdefs.IsNotFound(err) {
 		t.Fatal(err)
 	}
@@ -150,7 +151,7 @@ func TestImageUsage(t *testing.T) {
 	defer client.Close()
 
 	// Cleanup
-	err = client.ImageService().Delete(ctx, imageName)
+	err = client.ImageService().Delete(ctx, imageName, images.SynchronousDelete())
 	if err != nil && !errdefs.IsNotFound(err) {
 		t.Fatal(err)
 	}
@@ -179,6 +180,7 @@ func TestImageUsage(t *testing.T) {
 
 	// Pin image name to specific version for future fetches
 	imageName = imageName + "@" + image.Target().Digest.String()
+	defer client.ImageService().Delete(ctx, imageName, images.SynchronousDelete())
 
 	// Fetch single platforms, but all manifests pulled
 	if _, err := client.Fetch(ctx, imageName, WithPlatformMatcher(testPlatform), WithAllMetadata()); err != nil {

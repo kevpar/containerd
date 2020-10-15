@@ -23,6 +23,7 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"path"
 	"runtime"
 	"strings"
 	"syscall"
@@ -35,11 +36,14 @@ import (
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/oci"
 	"github.com/containerd/containerd/platforms"
+	"github.com/containerd/containerd/plugin"
 	_ "github.com/containerd/containerd/runtime"
+	"github.com/containerd/containerd/runtime/v2/runc/options"
 	"github.com/containerd/typeurl"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 
 	"github.com/containerd/containerd/errdefs"
+	"github.com/containerd/go-runc"
 	gogotypes "github.com/gogo/protobuf/types"
 )
 
@@ -137,9 +141,13 @@ func TestContainerStart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if pid := task.Pid(); pid < 1 {
-		t.Errorf("invalid task pid %d", pid)
+	if runtime.GOOS != "windows" {
+		// task.Pid not implemented on Windows
+		if pid := task.Pid(); pid < 1 {
+			t.Errorf("invalid task pid %d", pid)
+		}
 	}
+
 	if err := task.Start(ctx); err != nil {
 		t.Error(err)
 		task.Delete(ctx)
@@ -253,7 +261,7 @@ func TestContainerExec(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), withProcessArgs("sleep", "100")))
+	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), longCommand))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +346,7 @@ func TestContainerLargeExecArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), withProcessArgs("sleep", "100")))
+	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), longCommand))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,7 +422,7 @@ func TestContainerPids(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), withProcessArgs("sleep", "100")))
+	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), longCommand))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,8 +455,9 @@ func TestContainerPids(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if l := len(processes); l != 1 {
-			t.Errorf("expected 1 process but received %d", l)
+		// 2 processes, 1 for sh and one for sleep
+		if l := len(processes); l != 2 {
+			t.Errorf("expected 2 process but received %d", l)
 		}
 		if len(processes) > 0 {
 			actual := processes[0].Pid
@@ -458,6 +467,11 @@ func TestContainerPids(t *testing.T) {
 		}
 	}
 	if err := task.Kill(ctx, syscall.SIGKILL); err != nil {
+		select {
+		case s := <-statusC:
+			t.Log(s.Result())
+		default:
+		}
 		t.Error(err)
 	}
 	<-statusC
@@ -540,7 +554,7 @@ func TestDeleteRunningContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), withProcessArgs("sleep", "100")))
+	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), longCommand))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -595,7 +609,7 @@ func TestContainerKill(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), withProcessArgs("sleep", "10")))
+	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), longCommand))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,6 +640,86 @@ func TestContainerKill(t *testing.T) {
 	}
 	if !errdefs.IsNotFound(err) {
 		t.Errorf("expected error %q but received %q", errdefs.ErrNotFound, err)
+	}
+}
+
+func TestKillContainerDeletedByRunc(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("Test relies on runc and is not supported on Windows")
+	}
+
+	// We skip this case when runtime is crun.
+	// More information in https://github.com/containerd/containerd/pull/4214#discussion_r422769497
+	if os.Getenv("RUNC_FLAVOR") == "crun" {
+		t.Skip("skip it when using crun")
+	}
+
+	client, err := newClient(t, address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	if client.runtime == plugin.RuntimeLinuxV1 {
+		t.Skip("test relies on runtime v2")
+	}
+
+	var (
+		image       Image
+		ctx, cancel = testContext(t)
+		id          = t.Name()
+		runcRoot    = "/tmp/runc-test"
+	)
+	defer cancel()
+
+	image, err = client.GetImage(ctx, testImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	container, err := client.NewContainer(ctx, id,
+		WithNewSnapshot(id, image),
+		WithNewSpec(oci.WithImageConfig(image), longCommand),
+		WithRuntime(client.runtime, &options.Options{Root: runcRoot}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer container.Delete(ctx)
+
+	task, err := container.NewTask(ctx, empty())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer task.Delete(ctx)
+
+	statusC, err := task.Wait(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := task.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	rcmd := &runc.Runc{
+		Root: path.Join(runcRoot, testNamespace),
+	}
+
+	if err := rcmd.Delete(ctx, id, &runc.DeleteOpts{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	err = task.Kill(ctx, syscall.SIGKILL)
+	if err == nil {
+		t.Fatal("kill should return NotFound error")
+	} else if !errdefs.IsNotFound(err) {
+		t.Errorf("expected error %q but received %q", errdefs.ErrNotFound, err)
+	}
+
+	select {
+	case <-statusC:
+	case <-time.After(2 * time.Second):
+		t.Errorf("unexpected timeout when try to get exited container's status")
 	}
 }
 
@@ -697,7 +791,7 @@ func TestContainerExecNoBinaryExists(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), withProcessArgs("sleep", "100")))
+	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), longCommand))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -779,8 +873,11 @@ func TestWaitStoppedTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if pid := task.Pid(); pid < 1 {
-		t.Errorf("invalid task pid %d", pid)
+	if runtime.GOOS != "windows" {
+		// Getting the pid is not currently implemented on windows
+		if pid := task.Pid(); pid < 1 {
+			t.Errorf("invalid task pid %d", pid)
+		}
 	}
 	if err := task.Start(ctx); err != nil {
 		t.Error(err)
@@ -825,7 +922,7 @@ func TestWaitStoppedProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), withProcessArgs("sleep", "100")))
+	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), longCommand))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -912,7 +1009,7 @@ func TestTaskForceDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), withProcessArgs("sleep", "30")))
+	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), longCommand))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -953,7 +1050,7 @@ func TestProcessForceDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), withProcessArgs("sleep", "30")))
+	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), longCommand))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -980,7 +1077,11 @@ func TestProcessForceDelete(t *testing.T) {
 	}
 
 	processSpec := spec.Process
-	withExecArgs(processSpec, "sleep", "20")
+	if runtime.GOOS == "windows" {
+		withExecArgs(processSpec, "cmd", "/c", "ping -t localhost")
+	} else {
+		withExecArgs(processSpec, "/bin/sh", "-c", "while true; do sleep 1; done")
+	}
 	execID := t.Name() + "_exec"
 	process, err := task.Exec(ctx, execID, processSpec, empty())
 	if err != nil {
@@ -1151,7 +1252,7 @@ func TestDeleteContainerExecCreated(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), withProcessArgs("sleep", "100")))
+	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), longCommand))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1222,7 +1323,7 @@ func TestContainerMetrics(t *testing.T) {
 	}
 	container, err := client.NewContainer(ctx, id,
 		WithNewSnapshot(id, image),
-		WithNewSpec(oci.WithImageConfig(image), oci.WithProcessArgs("sleep", "30")))
+		WithNewSpec(oci.WithImageConfig(image), longCommand))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1577,4 +1678,159 @@ func TestShimSockLength(t *testing.T) {
 	}
 
 	<-statusC
+}
+
+func TestContainerExecLargeOutputWithTTY(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Test does not run on Windows")
+	}
+
+	t.Parallel()
+
+	client, err := newClient(t, address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	var (
+		image       Image
+		ctx, cancel = testContext(t)
+		id          = t.Name()
+	)
+	defer cancel()
+
+	image, err = client.GetImage(ctx, testImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), longCommand))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer container.Delete(ctx, WithSnapshotCleanup)
+
+	task, err := container.NewTask(ctx, empty())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer task.Delete(ctx)
+
+	finishedC, err := task.Wait(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := task.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 100; i++ {
+		spec, err := container.Spec(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// start an exec process without running the original container process info
+		processSpec := spec.Process
+		withExecArgs(processSpec, "sh", "-c", `seq -s " " 1000000`)
+
+		stdout := bytes.NewBuffer(nil)
+
+		execID := t.Name() + "_exec"
+		process, err := task.Exec(ctx, execID, processSpec, cio.NewCreator(withByteBuffers(stdout), withProcessTTY()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		processStatusC, err := process.Wait(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if err := process.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		// wait for the exec to return
+		status := <-processStatusC
+		code, _, err := status.Result()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if code != 0 {
+			t.Errorf("expected exec exit code 0 but received %d", code)
+		}
+		if _, err := process.Delete(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		const expectedSuffix = "999999 1000000"
+		stdoutString := stdout.String()
+		if !strings.Contains(stdoutString, expectedSuffix) {
+			t.Fatalf("process output does not end with %q at iteration %d, here are the last 20 characters of the output:\n\n %q", expectedSuffix, i, stdoutString[len(stdoutString)-20:])
+		}
+
+	}
+
+	if err := task.Kill(ctx, syscall.SIGKILL); err != nil {
+		t.Error(err)
+	}
+	<-finishedC
+}
+
+func TestShortRunningTaskPid(t *testing.T) {
+	t.Parallel()
+
+	client, err := newClient(t, address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	var (
+		image       Image
+		ctx, cancel = testContext(t)
+		id          = t.Name()
+	)
+	defer cancel()
+
+	image, err = client.GetImage(ctx, testImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), shortCommand))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer container.Delete(ctx, WithSnapshotCleanup)
+
+	task, err := container.NewTask(ctx, empty())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer task.Delete(ctx)
+
+	finishedC, err := task.Wait(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := task.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	int32PID := int32(task.Pid())
+	if int32PID <= 0 {
+		t.Errorf("Unexpected task pid %d", int32PID)
+	}
+	<-finishedC
+}
+
+func withProcessTTY() cio.Opt {
+	return func(opt *cio.Streams) {
+		cio.WithTerminal(opt)
+	}
 }

@@ -1,6 +1,6 @@
 // +build !windows
 
-package symlink
+package symlink // import "github.com/docker/docker/pkg/symlink"
 
 import (
 	"path/filepath"
@@ -13,3 +13,5 @@ func evalSymlinks(path string) (string, error) {
 func isDriveOrRoot(p string) bool {
 	return p == string(filepath.Separator)
 }
+
+var isAbs = filepath.IsAbs

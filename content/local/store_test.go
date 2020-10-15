@@ -40,7 +40,7 @@ import (
 
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	"gotest.tools/assert"
+	"gotest.tools/v3/assert"
 )
 
 type memoryLabelStore struct {
@@ -329,7 +329,10 @@ func checkCopy(t checker, size int64, dst io.Writer, src io.Reader) {
 }
 
 func checkBlobPath(t *testing.T, cs content.Store, dgst digest.Digest) string {
-	path := cs.(*store).blobPath(dgst)
+	path, err := cs.(*store).blobPath(dgst)
+	if err != nil {
+		t.Fatalf("failed to calculate blob path: %v", err)
+	}
 
 	if path != filepath.Join(cs.(*store).root, "blobs", dgst.Algorithm().String(), dgst.Hex()) {
 		t.Fatalf("unexpected path: %q", path)

@@ -26,9 +26,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/pkg/testutil"
+	"github.com/containerd/containerd/plugin"
 	"github.com/containerd/containerd/snapshots"
 	"github.com/containerd/containerd/snapshots/testsuite"
 	"github.com/containerd/continuity/testutil/loopback"
@@ -62,15 +64,34 @@ func boltSnapshotter(t *testing.T) func(context.Context, string) (snapshots.Snap
 			loop.Close()
 			return nil, nil, errors.Wrapf(err, "failed to make btrfs filesystem (out: %q)", out)
 		}
-		if out, err := exec.Command("mount", loop.Device, root).CombinedOutput(); err != nil {
-			loop.Close()
-			return nil, nil, errors.Wrapf(err, "failed to mount device %s (out: %q)", loop.Device, out)
-		}
+		// sync after a mkfs on the loopback before trying to mount the device
+		unix.Sync()
 
-		snapshotter, err := NewSnapshotter(root)
-		if err != nil {
-			loop.Close()
-			return nil, nil, errors.Wrap(err, "failed to create new snapshotter")
+		var snapshotter snapshots.Snapshotter
+		for i := 0; i < 5; i++ {
+			if out, err := exec.Command("mount", loop.Device, root).CombinedOutput(); err != nil {
+				loop.Close()
+				return nil, nil, errors.Wrapf(err, "failed to mount device %s (out: %q)", loop.Device, out)
+			}
+
+			if i > 0 {
+				time.Sleep(10 * time.Duration(i) * time.Millisecond)
+			}
+
+			snapshotter, err = NewSnapshotter(root)
+			if err == nil {
+				break
+			} else if !errors.Is(err, plugin.ErrSkipPlugin) {
+				return nil, nil, err
+			}
+
+			t.Logf("Attempt %d to create btrfs snapshotter failed: %#v", i+1, err)
+
+			// unmount and try again
+			unix.Unmount(root, 0)
+		}
+		if snapshotter == nil {
+			return nil, nil, errors.Wrap(err, "failed to successfully create snapshotter after 5 attempts")
 		}
 
 		return snapshotter, func() error {

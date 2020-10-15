@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/containerd/cgroups"
 	"github.com/containerd/containerd/oci"
 	"github.com/containerd/containerd/pkg/testutil"
 	"github.com/containerd/containerd/plugin"
@@ -164,9 +165,9 @@ version = 1
 		t.Fatal(err)
 	}
 
-	stateJSONPath := filepath.Join(runtimeRoot, testNamespace, id, "state.json")
-	if _, err = os.Stat(stateJSONPath); err != nil {
-		t.Errorf("error while getting stat for %s: %v", stateJSONPath, err)
+	containerPath := filepath.Join(runtimeRoot, testNamespace, id)
+	if _, err = os.Stat(containerPath); err != nil {
+		t.Errorf("error while getting stat for %s: %v", containerPath, err)
 	}
 
 	if err = task.Kill(ctx, syscall.SIGKILL); err != nil {
@@ -212,6 +213,9 @@ func getCgroupPath() (map[string]string, error) {
 
 // TestDaemonCustomCgroup ensures plugin.cgroup.path is not ignored
 func TestDaemonCustomCgroup(t *testing.T) {
+	if cgroups.Mode() == cgroups.Unified {
+		t.Skip("test requires cgroup1")
+	}
 	cgroupPath, err := getCgroupPath()
 	if err != nil {
 		t.Fatal(err)

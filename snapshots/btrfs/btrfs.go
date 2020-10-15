@@ -77,7 +77,7 @@ func NewSnapshotter(root string) (snapshots.Snapshotter, error) {
 		return nil, err
 	}
 	if mnt.FSType != "btrfs" {
-		return nil, errors.Wrapf(plugin.ErrSkipPlugin, "path %s must be a btrfs filesystem to be used with the btrfs snapshotter", root)
+		return nil, errors.Wrapf(plugin.ErrSkipPlugin, "path %s (%s) must be a btrfs filesystem to be used with the btrfs snapshotter", root, mnt.FSType)
 	}
 	var (
 		active    = filepath.Join(root, "active")
@@ -186,13 +186,13 @@ func (b *snapshotter) usage(ctx context.Context, key string) (snapshots.Usage, e
 }
 
 // Walk the committed snapshots.
-func (b *snapshotter) Walk(ctx context.Context, fn func(context.Context, snapshots.Info) error) error {
+func (b *snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, fs ...string) error {
 	ctx, t, err := b.ms.TransactionContext(ctx, false)
 	if err != nil {
 		return err
 	}
 	defer t.Rollback()
-	return storage.WalkInfo(ctx, fn)
+	return storage.WalkInfo(ctx, fn, fs...)
 }
 
 func (b *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...snapshots.Opt) ([]mount.Mount, error) {

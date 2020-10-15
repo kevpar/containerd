@@ -50,7 +50,6 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	bolt "go.etcd.io/bbolt"
 	"golang.org/x/sys/unix"
 )
 
@@ -63,6 +62,9 @@ const (
 	configFilename = "config.json"
 	defaultRuntime = "runc"
 	defaultShim    = "containerd-shim"
+
+	// cleanupTimeout is default timeout for cleanup operations
+	cleanupTimeout = 1 * time.Minute
 )
 
 func init() {
@@ -112,13 +114,13 @@ func New(ic *plugin.InitContext) (interface{}, error) {
 	}
 	cfg := ic.Config.(*Config)
 	r := &Runtime{
-		root:    ic.Root,
-		state:   ic.State,
-		tasks:   runtime.NewTaskList(),
-		db:      m.(*metadata.DB),
-		address: ic.Address,
-		events:  ic.Events,
-		config:  cfg,
+		root:       ic.Root,
+		state:      ic.State,
+		tasks:      runtime.NewTaskList(),
+		containers: metadata.NewContainerStore(m.(*metadata.DB)),
+		address:    ic.Address,
+		events:     ic.Events,
+		config:     cfg,
 	}
 	tasks, err := r.restoreTasks(ic.Context)
 	if err != nil {
@@ -138,9 +140,9 @@ type Runtime struct {
 	state   string
 	address string
 
-	tasks  *runtime.TaskList
-	db     *metadata.DB
-	events *exchange.Exchange
+	tasks      *runtime.TaskList
+	containers containers.Store
+	events     *exchange.Exchange
 
 	config *Config
 }
@@ -213,7 +215,10 @@ func (r *Runtime) Create(ctx context.Context, id string, opts runtime.CreateOpts
 	}
 	defer func() {
 		if err != nil {
-			if kerr := s.KillShim(ctx); kerr != nil {
+			deferCtx, deferCancel := context.WithTimeout(
+				namespaces.WithNamespace(context.TODO(), namespace), cleanupTimeout)
+			defer deferCancel()
+			if kerr := s.KillShim(deferCtx); kerr != nil {
 				log.G(ctx).WithError(err).Error("failed to kill shim")
 			}
 		}
@@ -508,14 +513,8 @@ func (r *Runtime) getRuntime(ctx context.Context, ns, id string) (*runc.Runc, er
 }
 
 func (r *Runtime) getRuncOptions(ctx context.Context, id string) (*runctypes.RuncOptions, error) {
-	var container containers.Container
-
-	if err := r.db.View(func(tx *bolt.Tx) error {
-		store := metadata.NewContainerStore(tx)
-		var err error
-		container, err = store.Get(ctx, id)
-		return err
-	}); err != nil {
+	container, err := r.containers.Get(ctx, id)
+	if err != nil {
 		return nil, err
 	}
 

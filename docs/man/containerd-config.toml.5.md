@@ -39,6 +39,8 @@ separately (for example vendors may keep a custom runtime configuration in a
 separate file without modifying the main `config.toml`).
 Imported files will overwrite simple fields like `int` or
 `string` (if not empty) and will append `array` and `map` fields.
+Imported files are also versioned, and the version can't be higher than
+the main config.
 
 **[grpc]**
 : Section for gRPC socket listener settings. Contains three properties:
@@ -126,7 +128,7 @@ imports = ["/etc/containerd/runtime_*.toml", "./debug.toml"]
     deletion_threshold = 0
     mutation_threshold = 100
     schedule_delay = 0
-    startup_delay = 100000000
+    startup_delay = "100ms"
 ```
 
 ## BUGS
@@ -140,4 +142,4 @@ Phil Estes <estesp@gmail.com>
 
 ## SEE ALSO
 
-ctr(1), containerd-config(1), containerd(1)
+ctr(8), containerd-config(8), containerd(8)

@@ -28,8 +28,8 @@ import (
 
 	"github.com/pkg/errors"
 	"go.etcd.io/bbolt"
-	"gotest.tools/assert"
-	is "gotest.tools/assert/cmp"
+	"gotest.tools/v3/assert"
+	is "gotest.tools/v3/assert/cmp"
 )
 
 var (
@@ -80,7 +80,7 @@ func TestPoolMetadata_AddDeviceDuplicate(t *testing.T) {
 	assert.NilError(t, err)
 
 	err = store.AddDevice(testCtx, &DeviceInfo{Name: "test"})
-	assert.Equal(t, ErrAlreadyExists, errors.Cause(err))
+	assert.Assert(t, errors.Is(err, ErrAlreadyExists))
 }
 
 func TestPoolMetadata_ReuseDeviceID(t *testing.T) {

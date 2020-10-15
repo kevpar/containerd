@@ -101,7 +101,7 @@ func (m *PoolMetadata) AddDevice(ctx context.Context, info *DeviceInfo) error {
 		// See https://github.com/containerd/containerd/pull/3436 for more context.
 		var existing DeviceInfo
 		if err := getObject(devicesBucket, info.Name, &existing); err == nil && existing.State != Faulty {
-			return ErrAlreadyExists
+			return errors.Wrapf(ErrAlreadyExists, "device %q is already there %+v", info.Name, existing)
 		}
 
 		// Find next available device ID
@@ -120,6 +120,14 @@ func (m *PoolMetadata) AddDevice(ctx context.Context, info *DeviceInfo) error {
 	}
 
 	return nil
+}
+
+// ChangeDeviceState changes the device state given the device name in devices bucket.
+func (m *PoolMetadata) ChangeDeviceState(ctx context.Context, name string, state DeviceState) error {
+	return m.UpdateDevice(ctx, name, func(deviceInfo *DeviceInfo) error {
+		deviceInfo.State = state
+		return nil
+	})
 }
 
 // MarkFaulty marks the given device and corresponding devmapper device ID as faulty.

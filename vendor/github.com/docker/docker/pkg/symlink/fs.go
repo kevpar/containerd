@@ -4,7 +4,7 @@
 
 // This code is a modified version of path/filepath/symlink.go from the Go standard library.
 
-package symlink
+package symlink // import "github.com/docker/docker/pkg/symlink"
 
 import (
 	"bytes"
@@ -12,8 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/docker/docker/pkg/system"
 )
 
 // FollowSymlinkInScope is a wrapper around evalSymlinksInScope that returns an
@@ -123,7 +121,7 @@ func evalSymlinksInScope(path, root string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if system.IsAbs(dest) {
+		if isAbs(dest) {
 			b.Reset()
 		}
 		path = dest + string(filepath.Separator) + path

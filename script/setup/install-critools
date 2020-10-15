@@ -21,9 +21,12 @@
 set -eu -o pipefail
 
 go get -u github.com/onsi/ginkgo/ginkgo
-CRITEST_COMMIT=427262054f59f3b849391310856a19474acb7e83
-go get -d github.com/kubernetes-incubator/cri-tools/...
-cd $GOPATH/src/github.com/kubernetes-incubator/cri-tools
+CRITEST_COMMIT=2bf7674922a424337d7580a08166d666c6802818 # v1.18.0-100-g2bf7674
+go get -d github.com/kubernetes-sigs/cri-tools/...
+cd "$GOPATH"/src/github.com/kubernetes-sigs/cri-tools
 git checkout $CRITEST_COMMIT
 make
-make install
+sudo make install -e BINDIR=${DESTDIR:=''}/usr/local/bin
+cat << EOF | sudo tee ${DESTDIR}/etc/crictl.yaml
+runtime-endpoint: unix:///run/containerd/containerd.sock
+EOF

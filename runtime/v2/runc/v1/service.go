@@ -271,11 +271,11 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		s.eventSendMu.Unlock()
 		return nil, errdefs.ToGRPC(err)
 	}
-	if err := s.ep.Add(container.ID, container.Cgroup()); err != nil {
-		logrus.WithError(err).Error("add cg to OOM monitor")
-	}
 	switch r.ExecID {
 	case "":
+		if err := s.ep.Add(container.ID, container.Cgroup()); err != nil {
+			logrus.WithError(err).Error("add cg to OOM monitor")
+		}
 		s.send(&eventstypes.TaskStart{
 			ContainerID: container.ID,
 			Pid:         uint32(p.Pid()),
@@ -623,7 +623,7 @@ func shouldKillAllOnExit(bundlePath string) (bool, error) {
 
 	if bundleSpec.Linux != nil {
 		for _, ns := range bundleSpec.Linux.Namespaces {
-			if ns.Type == specs.PIDNamespace {
+			if ns.Type == specs.PIDNamespace && ns.Path == "" {
 				return false, nil
 			}
 		}

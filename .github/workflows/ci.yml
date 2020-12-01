@@ -26,13 +26,13 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v1
         with:
-          go-version: '1.13.15'
+          go-version: '1.15.5'
 
       - name: Set env
         shell: bash
         run: |
-          echo "::set-env name=GOPATH::${{ github.workspace }}"
-          echo "::add-path::${{ github.workspace }}/bin"
+          echo "GOPATH=${{ github.workspace }}" >> $GITHUB_ENV
+          echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
 
       - name: Checkout
         uses: actions/checkout@v2
@@ -60,71 +60,14 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      #
-      # Install Go
-      #
-      - name: Install Go
-        uses: actions/setup-go@v1
-        with:
-          go-version: '1.13.15'
-
-      - name: Set env
-        shell: bash
-        run: |
-          echo "::set-env name=GOPATH::${{ github.workspace }}"
-          echo "::add-path::${{ github.workspace }}/bin"
-
-      #
-      # Checkout repos
-      #
-      - name: Checkout this repo
-        uses: actions/checkout@v2
+      - uses: actions/checkout@v2
         with:
           path: src/github.com/containerd/containerd
           fetch-depth: 100
 
-      - name: Checkout project repo
-        uses: actions/checkout@v2
+      - uses: containerd/project-checks@v1
         with:
-          repository: containerd/project
-          path: src/github.com/containerd/project
-
-      #
-      # Go get dependencies
-      #
-      - name: Install dependencies
-        env:
-          GO111MODULE: off
-        run: |
-          go get -u github.com/vbatts/git-validation
-          go get -u github.com/kunalkushwaha/ltag
-          go get -u github.com/LK4D4/vndr
-
-      #
-      # DCO / File headers / Vendor directory validation
-      #
-      - name: DCO
-        env:
-          GITHUB_COMMIT_URL: ${{ github.event.pull_request.commits_url }}
-          DCO_VERBOSITY: "-q"
-          DCO_RANGE: ""
-        working-directory: src/github.com/containerd/containerd
-        run: |
-          set -x
-          if [ -z "${GITHUB_COMMIT_URL}" ]; then
-          DCO_RANGE=$(jq -r '.after + "..HEAD"' ${GITHUB_EVENT_PATH})
-          else
-          DCO_RANGE=$(curl ${GITHUB_COMMIT_URL} | jq -r '.[0].parents[0].sha + "..HEAD"')
-          fi
-          ../project/script/validate/dco
-
-      - name: Headers
-        run: ../project/script/validate/fileheader ../project/
-        working-directory: src/github.com/containerd/containerd
-
-      - name: Vendor
-        run: ../project/script/validate/vendor
-        working-directory: src/github.com/containerd/containerd
+          working-directory: src/github.com/containerd/containerd
 
   #
   # Protobuf checks
@@ -138,13 +81,13 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v1
         with:
-          go-version: '1.13.15'
+          go-version: '1.15.5'
 
       - name: Set env
         shell: bash
         run: |
-          echo "::set-env name=GOPATH::${{ github.workspace }}"
-          echo "::add-path::${{ github.workspace }}/bin"
+          echo "GOPATH=${{ github.workspace }}" >> $GITHUB_ENV
+          echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
 
       - name: Checkout
         uses: actions/checkout@v2
@@ -185,13 +128,13 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v1
         with:
-          go-version: '1.13.15'
+          go-version: '1.15.5'
 
       - name: Set env
         shell: bash
         run: |
-          echo "::set-env name=GOPATH::${{ github.workspace }}"
-          echo "::add-path::${{ github.workspace }}/bin"
+          echo "GOPATH=${{ github.workspace }}" >> $GITHUB_ENV
+          echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
 
       - name: Checkout
         uses: actions/checkout@v2
@@ -222,13 +165,13 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v1
         with:
-          go-version: '1.13.15'
+          go-version: '1.15.5'
 
       - name: Set env
         shell: bash
         run: |
-          echo "::set-env name=GOPATH::${{ github.workspace }}"
-          echo "::add-path::${{ github.workspace }}/bin"
+          echo "GOPATH=${{ github.workspace }}" >> $GITHUB_ENV
+          echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
 
       - name: Checkout
         uses: actions/checkout@v2
@@ -254,13 +197,13 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v1
         with:
-          go-version: '1.13.15'
+          go-version: '1.15.5'
 
       - name: Set env
         shell: bash
         run: |
-          echo "::set-env name=GOPATH::${{ github.workspace }}"
-          echo "::add-path::${{ github.workspace }}/src/github.com/containerd/containerd/bin"
+          echo "GOPATH=${{ github.workspace }}" >> $GITHUB_ENV
+          echo "${{ github.workspace }}/src/github.com/containerd/containerd/bin" >> $GITHUB_PATH
 
       - name: Checkout containerd
         uses: actions/checkout@v2
@@ -290,6 +233,15 @@ jobs:
           git fetch --tags origin "${SHIM_COMMIT}"
           git checkout "${SHIM_COMMIT}"
           GO111MODULE=on go build -mod=vendor -o "${bindir}/containerd-shim-runhcs-v1.exe" ./cmd/containerd-shim-runhcs-v1
+
+      - name: Tests
+        shell: bash
+        env:
+          CGO_ENABLED: 1
+        run: |
+          cd src/github.com/containerd/containerd
+          mingw32-make.exe test root-test
+
       - name: Integration 1
         shell: bash
         run: |
@@ -325,23 +277,13 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v1
         with:
-          go-version: '1.13.15'
-
-      - name: Setup gosu
-        shell: bash
-        run: |
-          GOSU=/usr/local/bin/gosu
-          arch="$(dpkg --print-architecture | awk -F- '{ print $NF }')"
-          sudo wget -O ${GOSU} "https://github.com/tianon/gosu/releases/download/1.12/gosu-$arch"
-          sudo chmod +x ${GOSU}
-          sudo chown root ${GOSU}
-          sudo chmod +s ${GOSU}
+          go-version: '1.15.5'
 
       - name: Set env
         shell: bash
         run: |
-          echo "::set-env name=GOPATH::${{ github.workspace }}"
-          echo "::add-path::${{ github.workspace }}/bin"
+          echo "GOPATH=${{ github.workspace }}" >> $GITHUB_ENV
+          echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
 
       - name: Checkout containerd
         uses: actions/checkout@v2
@@ -352,10 +294,10 @@ jobs:
         env:
           RUNC_FLAVOR: ${{ matrix.runc }}
         run: |
-          sudo PATH=$PATH script/setup/install-seccomp
-          gosu root script/setup/install-runc
-          script/setup/install-cni
-          script/setup/install-critools
+          sudo -E PATH=$PATH script/setup/install-seccomp
+          sudo -E PATH=$PATH script/setup/install-runc
+          sudo -E PATH=$PATH script/setup/install-cni
+          sudo -E PATH=$PATH script/setup/install-critools
         working-directory: src/github.com/containerd/containerd
 
       - name: Install criu
@@ -381,6 +323,15 @@ jobs:
         run: |
           make binaries
           sudo make install
+        working-directory: src/github.com/containerd/containerd
+
+      - name: Tests
+        env:
+          GOPROXY: direct
+          SKIPTESTS: github.com/containerd/containerd/snapshots/devmapper
+        run: |
+          make test
+          sudo -E PATH=$PATH GOPATH=$GOPATH GOPROXY=$GOPROXY make root-test
         working-directory: src/github.com/containerd/containerd
 
       - name: Integration 1
@@ -410,10 +361,10 @@ jobs:
           mkdir -p ${BDIR}/{root,state}
           cat > ${BDIR}/config.toml <<EOF
             [plugins.cri.containerd.default_runtime]
-              runtime_type = \"${TEST_RUNTIME}\"
+              runtime_type = "${TEST_RUNTIME}"
           EOF
           ls /etc/cni/net.d
-          sudo PATH=$PATH BDIR=$BDIR /usr/local/bin/containerd -a ${BDIR}/c.sock -root ${BDIR}/root -state ${BDIR}/state -log-level debug &> ${BDIR}/containerd-cri.log &
+          sudo PATH=$PATH BDIR=$BDIR /usr/local/bin/containerd -a ${BDIR}/c.sock --config ${BDIR}/config.toml --root ${BDIR}/root --state ${BDIR}/state --log-level debug &> ${BDIR}/containerd-cri.log &
           sudo PATH=$PATH BDIR=$BDIR /usr/local/bin/ctr -a ${BDIR}/c.sock version
           sudo PATH=$PATH BDIR=$BDIR GOPATH=$GOPATH critest --runtime-endpoint=unix:///${BDIR}/c.sock --parallel=8
           TEST_RC=$?

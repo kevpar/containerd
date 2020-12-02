@@ -35,7 +35,7 @@ func TestParsePlatformSignalOnWindows(t *testing.T) {
 		{"1", syscall.Signal(1), "linux", false},
 		{"SIGKILL", syscall.SIGKILL, "linux", false},
 		{"NONEXIST", 0, "linux", true},
-		{"65536", 0, "linux", true},
+		{"65536", syscall.Signal(65536), "linux", false},
 
 		// test signals for windows platform
 		{"1", syscall.Signal(1), "windows", false},

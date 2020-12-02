@@ -120,32 +120,41 @@ var signalMapLinux = map[string]syscall.Signal{
 // the rawSignal can be a string with "SIG" prefix,
 // or a signal number in string format.
 func ParseSignal(rawSignal string) (syscall.Signal, error) {
-	return parseSignalFromMap(rawSignal, signalMapWindows)
+	return parseSignalGeneric(rawSignal, "windows")
 }
 
 // ParsePlatformSignal parses a given string into a syscall.Signal based on
 // the OS platform specified in `platform`.
 func ParsePlatformSignal(rawSignal, platform string) (syscall.Signal, error) {
-	if platform != "windows" {
-		return parseSignalFromMap(rawSignal, signalMapLinux)
-	}
-	return parseSignalFromMap(rawSignal, signalMapWindows)
+	return parseSignalGeneric(rawSignal, platform)
 }
 
-func parseSignalFromMap(rawSignal string, signalMap map[string]syscall.Signal) (syscall.Signal, error) {
+func parseSignalGeneric(rawSignal, platform string) (syscall.Signal, error) {
+	signalMap := getSignalMapForPlatform(platform)
 	s, err := strconv.Atoi(rawSignal)
 	if err == nil {
 		sig := syscall.Signal(s)
+		if platform != "windows" {
+			return sig, nil
+		}
+		// on windows, make sure we support this signal
 		for _, msig := range signalMap {
 			if sig == msig {
 				return sig, nil
 			}
 		}
-		return -1, fmt.Errorf("unknown signal %q", rawSignal)
+		return sig, fmt.Errorf("unknown signal %q", rawSignal)
 	}
 	signal, ok := signalMap[strings.TrimPrefix(strings.ToUpper(rawSignal), "SIG")]
 	if !ok {
 		return -1, fmt.Errorf("unknown signal %q", rawSignal)
 	}
 	return signal, nil
+}
+
+func getSignalMapForPlatform(platform string) map[string]syscall.Signal {
+	if platform != "windows" {
+		return signalMapLinux
+	}
+	return signalMapWindows
 }

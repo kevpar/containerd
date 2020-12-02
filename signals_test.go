@@ -56,7 +56,7 @@ func TestParsePlatformSignalGeneric(t *testing.T) {
 		{"1", syscall.Signal(1), "linux", false},
 		{"SIGKILL", syscall.SIGKILL, "linux", false},
 		{"NONEXIST", 0, "linux", true},
-		{"65536", 0, "linux", true},
+		{"65536", syscall.Signal(65536), "linux", false},
 	}
 	for _, ts := range testSignals {
 		t.Run(fmt.Sprintf("%s/%d/%s/%t", ts.raw, ts.want, ts.platform, ts.err), func(t *testing.T) {

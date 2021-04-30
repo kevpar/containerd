@@ -445,7 +445,7 @@ func newTransport() *http.Transport {
 func (c *criService) encryptedImagesPullOpts() []containerd.RemoteOpt {
 	if c.config.ImageDecryption.KeyModel == criconfig.KeyModelNode {
 		ltdd := imgcrypt.Payload{}
-		decUnpackOpt := encryption.WithUnpackConfigApplyOpts(encryption.WithDecryptedUnpack(&ltdd))
+		decUnpackOpt := containerd.WithUnpackConfigApplyOpts(encryption.WithDecryptedUnpack(&ltdd))
 		opt := containerd.WithUnpackOpts([]containerd.UnpackOpt{decUnpackOpt})
 		return []containerd.RemoteOpt{opt}
 	}

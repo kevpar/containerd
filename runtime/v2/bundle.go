@@ -24,8 +24,10 @@ import (
 	"path/filepath"
 
 	"github.com/containerd/containerd/identifiers"
+	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/namespaces"
+	cioutil "github.com/containerd/containerd/pkg/ioutil"
 	"github.com/pkg/errors"
 )
 
@@ -115,16 +117,32 @@ type Bundle struct {
 }
 
 // Delete a bundle atomically
-func (b *Bundle) Delete() error {
+func (b *Bundle) Delete(ctx context.Context) error {
 	work, werr := os.Readlink(filepath.Join(b.Path, "work"))
 	rootfs := filepath.Join(b.Path, "rootfs")
+
+	// on windows hcsshim writes panic logs in the bundle directory in a file named
+	// "panic.log" log those messages (if any).
+	// Read only upto 1MB worth of data from this file. If the file is larger
+	// than that, log that.
+	readLimit := int64(1024 * 1024) // 1MB
+	logBytes, err := cioutil.LimitedRead(filepath.Join(b.Path, "panic.log"), readLimit)
+	if err == nil && len(logBytes) > 0 {
+		if int64(len(logBytes)) == readLimit {
+			log.G(ctx).Warnf("shim panic log file %s is larger than 1MB, logging only first 1MB", filepath.Join(b.Path, "panic.log"))
+		}
+		log.G(ctx).WithField("log", string(logBytes)).Warn("found shim panic logs during delete")
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.G(ctx).WithError(err).Warn("failed to open shim panic log")
+	}
+
 	if err := mount.UnmountAll(rootfs, 0); err != nil {
 		return errors.Wrapf(err, "unmount rootfs %s", rootfs)
 	}
 	if err := os.Remove(rootfs); err != nil && !os.IsNotExist(err) {
 		return errors.Wrap(err, "failed to remove bundle rootfs")
 	}
-	err := atomicDelete(b.Path)
+	err = atomicDelete(b.Path)
 	if err == nil {
 		if werr == nil {
 			return atomicDelete(work)

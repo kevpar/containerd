@@ -127,7 +127,7 @@ func (m *TaskManager) Create(ctx context.Context, id string, opts runtime.Create
 	}
 	defer func() {
 		if err != nil {
-			bundle.Delete()
+			bundle.Delete(ctx)
 		}
 	}()
 	topts := opts.TaskOptions
@@ -246,12 +246,12 @@ func (m *TaskManager) loadTasks(ctx context.Context) error {
 		// fast path
 		bf, err := ioutil.ReadDir(bundle.Path)
 		if err != nil {
-			bundle.Delete()
+			bundle.Delete(ctx)
 			log.G(ctx).WithError(err).Errorf("fast path read bundle path for %s", bundle.Path)
 			continue
 		}
 		if len(bf) == 0 {
-			bundle.Delete()
+			bundle.Delete(ctx)
 			continue
 		}
 		container, err := m.container(ctx, id)
@@ -260,7 +260,7 @@ func (m *TaskManager) loadTasks(ctx context.Context) error {
 			if err := mount.UnmountAll(filepath.Join(bundle.Path, "rootfs"), 0); err != nil {
 				log.G(ctx).WithError(err).Errorf("forceful unmount of rootfs %s", id)
 			}
-			bundle.Delete()
+			bundle.Delete(ctx)
 			continue
 		}
 		binaryCall := shimBinary(ctx, bundle, container.Runtime.Name, m.containerdAddress, m.containerdTTRPCAddress, m.events, m.tasks)

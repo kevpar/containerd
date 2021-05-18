@@ -167,7 +167,7 @@ func (b *binary) Delete(ctx context.Context) (*runtime.Exit, error) {
 	if err := response.Unmarshal(out.Bytes()); err != nil {
 		return nil, err
 	}
-	if err := b.bundle.Delete(); err != nil {
+	if err := b.bundle.Delete(ctx); err != nil {
 		return nil, err
 	}
 	return &runtime.Exit{

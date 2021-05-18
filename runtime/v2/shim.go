@@ -241,7 +241,7 @@ func (s *shim) Delete(ctx context.Context) (*runtime.Exit, error) {
 		log.G(ctx).WithField("id", s.ID()).WithError(err).Error("failed to shutdown shim")
 	}
 	s.Close()
-	if err := s.bundle.Delete(); err != nil {
+	if err := s.bundle.Delete(ctx); err != nil {
 		log.G(ctx).WithField("id", s.ID()).WithError(err).Error("failed to delete bundle")
 	}
 	if shimErr != nil {

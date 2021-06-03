@@ -225,17 +225,25 @@ func (s *snapshotter) Remove(ctx context.Context, key string) error {
 	renamedID := "rm-" + id
 	renamed := s.getSnapshotDir(renamedID)
 	if err := os.Rename(path, renamed); err != nil && !os.IsNotExist(err) {
-		if !os.IsPermission(err) {
-			return err
-		}
-		// If permission denied, it's possible that the scratch is still mounted, an
-		// artifact after a hard daemon crash for example. Worth a shot to try detaching it
-		// before retrying the rename.
-		if detachErr := vhd.DetachVhd(filepath.Join(path, "sandbox.vhdx")); detachErr != nil {
-			return errors.Wrapf(err, "failed to detach VHD: %s", detachErr)
-		}
-		if renameErr := os.Rename(path, renamed); renameErr != nil && !os.IsNotExist(renameErr) {
-			return errors.Wrapf(err, "second rename attempt following detach failed: %s", renameErr)
+		// Sometimes if there are some open handles to the files (especially VHD)
+		// inside the snapshot directory the rename call will return "access
+		// denied" or "file is being used by another process" errors.  Just
+		// returning that error causes the entire snapshot garbage collection
+		// operation to fail. To avoid that we return failed pre-condition error
+		// here so that snapshot garbage collection can continue and can cleanup
+		// other snapshots.
+		if os.IsPermission(err) {
+			// If permission denied, it's possible that the scratch is still mounted, an
+			// artifact after a hard daemon crash for example. Worth a shot to try detaching it
+			// before retrying the rename.
+			if detachErr := vhd.DetachVhd(filepath.Join(path, "sandbox.vhdx")); detachErr != nil {
+				return errors.Wrapf(errdefs.ErrFailedPrecondition, "failed to detach vhd during snapshot cleanup %s: %s", detachErr.Error(), err)
+			}
+			if renameErr := os.Rename(path, renamed); renameErr != nil && !os.IsNotExist(renameErr) {
+				return errors.Wrapf(errdefs.ErrFailedPrecondition, "second rename attempt failed  %s: %s", renameErr.Error(), err)
+			}
+		} else {
+			return errors.Wrap(errdefs.ErrFailedPrecondition, err.Error())
 		}
 	}
 

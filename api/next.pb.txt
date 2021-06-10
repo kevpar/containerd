@@ -840,7 +840,6 @@ file {
     java_outer_classname: "FieldMaskProto"
     java_multiple_files: true
     go_package: "google.golang.org/genproto/protobuf/field_mask;field_mask"
-    cc_enable_arenas: true
     objc_class_prefix: "GPB"
     csharp_namespace: "Google.Protobuf.WellKnownTypes"
   }
@@ -1840,6 +1839,14 @@ file {
       type_name: ".containerd.services.diff.v1.ApplyRequest.PayloadsEntry"
       json_name: "payloads"
     }
+    field {
+      name: "labels"
+      number: 4
+      label: LABEL_REPEATED
+      type: TYPE_MESSAGE
+      type_name: ".containerd.services.diff.v1.ApplyRequest.LabelsEntry"
+      json_name: "labels"
+    }
     nested_type {
       name: "PayloadsEntry"
       field {
@@ -1855,6 +1862,26 @@ file {
         label: LABEL_OPTIONAL
         type: TYPE_MESSAGE
         type_name: ".google.protobuf.Any"
+        json_name: "value"
+      }
+      options {
+        map_entry: true
+      }
+    }
+    nested_type {
+      name: "LabelsEntry"
+      field {
+        name: "key"
+        number: 1
+        label: LABEL_OPTIONAL
+        type: TYPE_STRING
+        json_name: "key"
+      }
+      field {
+        name: "value"
+        number: 2
+        label: LABEL_OPTIONAL
+        type: TYPE_STRING
         json_name: "value"
       }
       options {

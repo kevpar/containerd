@@ -24,6 +24,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
+	"strconv"
 	"time"
 
 	"github.com/Microsoft/go-winio/pkg/security"
@@ -44,6 +45,8 @@ import (
 const (
 	// maxLcowVhdSizeGB is the max size in GB of any layer
 	maxLcowVhdSizeGB = 128 * 1024 * 1024 * 1024
+	// dmVerityVHDFooterAnnotation enables appending of dm-verity footer when creating LCOW layer VHD
+	dmVerityVHDFooterAnnotation = "containerd.io/snapshot/diff/io.microsoft.storage.lcow.dm-verity-footer"
 )
 
 func init() {
@@ -154,7 +157,19 @@ func (s windowsLcowDiff) Apply(ctx context.Context, desc ocispec.Descriptor, mou
 		}
 	}()
 
-	err = tar2ext4.Convert(rc, outFile, tar2ext4.ConvertWhiteout, tar2ext4.AppendVhdFooter, tar2ext4.MaximumDiskSize(maxLcowVhdSizeGB))
+	t2e4Opts := []tar2ext4.Option{
+		tar2ext4.ConvertWhiteout,
+		tar2ext4.AppendVhdFooter,
+		tar2ext4.MaximumDiskSize(maxLcowVhdSizeGB),
+	}
+	if config.Labels != nil {
+		if strVal, ok := config.Labels[dmVerityVHDFooterAnnotation]; ok {
+			if val, err := strconv.ParseBool(strVal); err == nil && val {
+				t2e4Opts = append(t2e4Opts, tar2ext4.AppendDMVerity)
+			}
+		}
+	}
+	err = tar2ext4.Convert(rc, outFile, t2e4Opts...)
 	if err != nil {
 		return emptyDesc, errors.Wrapf(err, "failed to convert tar2ext4 vhd")
 	}

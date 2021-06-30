@@ -228,6 +228,15 @@ func WithMaxConcurrentDownloads(max int) RemoteOpt {
 	}
 }
 
+func WithDisableSameLayerUnpack() RemoteOpt {
+	return func(client *Client, c *RemoteContext) error {
+		c.DisableSameLayerUnpack = true
+		c.SnapshotterOpts = append(c.SnapshotterOpts,
+			snapshots.WithLabels(map[string]string{"containerd.io/snapshot/disable-same-unpack": ""}))
+		return nil
+	}
+}
+
 // WithAllMetadata downloads all manifests and known-configuration files
 func WithAllMetadata() RemoteOpt {
 	return func(_ *Client, c *RemoteContext) error {
